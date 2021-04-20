@@ -5,26 +5,101 @@ date: "15 4 2021"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
+```{r, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
+## Getting started
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+In this very first training you will try to work with Sentinel-2 data an process them to a rational output. For this purpose, we are going to download Sentinel-2 data, calculate the NDVI of these and detect change of forest coverage. I personally decided to choose the area of Sauerland due to the fact that the so called bark beetle (Borkenkäfer) infests a huge number of trees here, leading to a massive forest  dieback.
+I first used the tutorial from the RUS Copernicus training (https://www.youtube.com/watch?v=1dAhrc-kw8o&ab_channel=RUSCopernicusTraining)
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+First, you have load the needed packages for this training.
+```{r, results='hide', message=FALSE, warning=FALSE}
+pck <- (c("tidyr", "rgdal", "gdalcubes", "ggplot2", "raster", "leaflet", "rasterVis", "gridExtra", "RColorBrewer", "plotly"))
+new_pck <- pck[!pck %in% installed.packages()[,"Package"]] 
+if(length(new_pck)){install.packages(new_pck)}
 
-```{r cars}
-summary(cars)
+lapply(pck, require, character.only = TRUE)
+
+#Set the working directory
+setwd("C:/YOUR_PATH_TO_REPOSITORY/RemoteSensingTraining/RemoteSensingTraining/1-Sentinel2processing")#CHANGE THIS 
 ```
 
-## Including Plots
+### Loading data
 
-You can also embed plots, for example:
+Then you have load all needed data. But before it can be loaded the data has to be downloaded and produced.
+In this tutorial I decided to work in the area of the Sauerland so I downloadede Sentinel-2 for this area. Furthermore, I loaded the data into QGIS and created a shape-file containing a rectangular research-area.
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+You can use your own area and data, but if you would like to see what I did, just take the products.meta4 file in the folder of this training and download arias2 for your running system at: https://aria2.github.io/.
+After downloading, you have to exract aria2 to a folder of your wish and put the products.meta4 file inside of it. Then open a new command propt and navigate into the aria2 folder with the "cd  YOUR FOLDERPATH" command. Now run the following lines and don't forget to insert your copernicus username and password for the Copernicus Open Access Hub.
+The download should start right away.
+
+aria2c --http-user="YOUR USERNAME" --http-passwd="YOUR PASSWORD" --check-certificate=false --max-concurrent-downloads=2 -M products.meta4
+
+After downloading put all the images into one subfolder and change the value of S2 in the next lineto this folder.
+
+```{r}
+#load the researcharea create in QGIS
+research_area <- readOGR("research_area_Arnsberg.shp") 
+
+S2 <- "C:/YOUR_PATH_TO_IMG_FOLDER"
+S2 <- list.files(S2, recursive=TRUE, full.names = TRUE, pattern= "B0[2348]_10m.jp2$")
+S2 <- lapply(1:length(S2), function(x){raster(S2[x])} )
+
+#Stack them 
+S2_stack <- stack(S2)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+To have a short look a the data and the research area we can now have a look at the first image of the stack by plotting it.
+
+```{r, figures-side, fig.show="hold", out.width="50%"}
+#let's have a look at the first image of the stack
+plotRGB(S2_stack, r=3, g=2, b=1, scale=maxValue(S2[[2]]), stretch='hist')
+plot(research_area, add=TRUE, border='yellow', lwd=5)
+#false color
+plotRGB(S2_stack, r=4, g=3, b=2, scale=maxValue(S2[[2]]), stretch='hist')
+plot(research_area, add=TRUE, border='yellow', lwd=5)
+
+```
+
+Now, we are going to crop the data of our stack to the research area we created in QGIS, having the same CSR.
+
+```{r, figures-side, fig.show="hold", out.width="50%"}
+S2_stack_cropped <- crop(S2_stack, research_area)
+
+#let's have a look at the first picture again
+plotRGB(S2_stack_cropped, r=3, g=2, b=1, scale=maxValue(S2[[2]]), stretch='hist')
+plotRGB(S2_stack_cropped, r=4, g=3, b=2, scale=maxValue(S2[[2]]), stretch='hist')
+```
+
+Now it is time to calculate the NDVI of all the pictures using the NIR (Band 8) and the red band (Band 4) of the Sentinel-2 satellite imagery.
+We creat a list of NDVI layers for each timestep we loaded before. Important to understand here is, that we know, that we loaded 4 bands of each timestep before leading to the looping from 1 to the length of S2 divided by FOUR! If we would load some aditional layers or less layers, we would have to change the division also.
+
+```{r}
+NDVI <- list()
+for(i in 1:(length(S2)/4) ){
+  NDVI[[i]] <- overlay(S2_stack_cropped[[(i-1)*4+3]],S2_stack_cropped[[(i-1)*4+4]],fun=function(x,y) (y-x)/(y+x))
+  names(NDVI[[i]]) <- paste0("NDVI_", strsplit(strsplit(names(S2_stack_cropped[[(i-1)*4+4]]), "_")[[1]][2],"T")[[1]][1])
+}
+
+#see what happend
+head(NDVI)
+
+NDVI_stack <- stack(NDVI)
+```
+
+Let's plot what we just calculated to see what we can get out of the data.
+
+```{r}
+
+#custom colors
+breaks <- c(-1,-0.5,0,0.5,1)
+pal <- brewer.pal (11, "RdYlGn")
+mapTheme <- rasterTheme (region = pal) 
+
+# Plot NDVI
+levelplot(NDVI_stack, scales=list(draw=FALSE), colorkey=FALSE, par.settings=mapTheme) 
+```
+
+In the second training we now go on with loading the Sentinel-2 data with the packaga GDAL-cubes to have a more structured and efficient way to go on with the analyses.
